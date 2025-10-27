@@ -274,10 +274,15 @@
         <!-- Header --><div class="flex justify-between items-start mb-10 border-b pb-4">
             <div>
                 <h1 class="text-4xl font-extrabold text-indigo-700 invoice-title">INVOICE</h1>
+                <!-- New Invoice Number Field --><div class="flex items-center space-x-4 mt-2">
+                    <label for="invoiceNumber" class="text-sm font-semibold text-gray-700">Invoice No:</label>
+                    <input type="text" id="invoiceNumber" placeholder="INV-001" class="input-style text-lg font-medium w-32" required>
+                </div>
                 <input type="date" id="invoiceDate" class="input-style text-lg font-medium mt-2" required>
             </div>
             <div class="text-right header-info flex flex-col items-end">
-                <!-- Logo Added Here --><img src="logo.png" alt="Stephanie Anne Counselling Logo" class="header-logo">
+                <!-- Logo Updated: Changed src to an absolute URL placeholder to fix GitHub Pages path issue. -->
+                <img src="https://placehold.co/200x80/ffe4e1/808080?text=Stephanie+Anne" alt="Stephanie Anne Counselling Logo - Pink Flower" class="header-logo" onerror="this.onerror=null;this.src='https://placehold.co/200x80/ffe4e1/808080?text=Stephanie+Anne'">
                 <p class="text-gray-600">Stephanieanne@client-led.uk</p>
                 <p class="text-gray-600">Tel: 07736973185</p>
             </div>
