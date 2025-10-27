@@ -1,1 +1,393 @@
-# ClientLedBilling
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Counselling Invoice Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom print styling */
+        @media print {
+            body {
+                font-family: 'Inter', sans-serif;
+                margin: 0;
+                padding: 0;
+            }
+            .no-print {
+                display: none;
+            }
+            .invoice-page {
+                box-shadow: none;
+                border: none;
+                width: 210mm; /* A4 width */
+                min-height: 297mm; /* A4 height */
+                margin: 0;
+                padding: 20mm;
+            }
+            .header-info input, .client-info-fields input, .item-table input, .item-table button {
+                border: none !important;
+                background-color: transparent !important;
+                pointer-events: none;
+            }
+            .item-table input, .item-table select {
+                padding: 0;
+                border: none !important; /* Hide border on print */
+                -webkit-appearance: none; /* Hide select arrow on print */
+                -moz-appearance: none;
+                appearance: none;
+            }
+            .invoice-page input[type="text"]:focus,
+            .invoice-page input[type="date"]:focus,
+            .invoice-page input[type="number"]:focus,
+            .invoice-page select:focus {
+                outline: none !important;
+                box-shadow: none !important;
+            }
+            .invoice-title {
+                color: #2563EB !important;
+            }
+            .footer-payment p {
+                font-size: 0.8rem;
+            }
+            /* Adjust logo size for print if necessary */
+            .header-logo {
+                max-width: 150px; /* Example: make logo smaller on print */
+                height: auto;
+            }
+        }
+        /* Page styling for screen view */
+        .invoice-page {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            max-width: 800px;
+            margin: 2rem auto;
+            background: white;
+            padding: 2rem;
+            min-height: 297mm; /* A4 aspect ratio helper */
+        }
+        .input-style {
+            border: 1px solid #ccc;
+            padding: 8px 12px;
+            border-radius: 6px;
+            transition: border-color 0.2s;
+        }
+        .input-style:focus {
+            border-color: #2563EB;
+            outline: none;
+        }
+        .header-logo {
+            max-width: 200px; /* Adjust as needed */
+            height: auto;
+            margin-bottom: 1rem; /* Space below the logo */
+        }
+        /* Style for the select dropdown */
+        .item-description {
+            padding-right: 2rem; /* Ensure space for the dropdown arrow */
+        }
+    </style>
+    <script>
+        // Define fees for services (UPDATED to £45.00 and £50.00)
+        const ONLINE_FEE = 45.00; 
+        const F2F_FEE = 50.00; 
+
+        // Function to map the selected service description to its corresponding fee
+        function getFeeForService(serviceType) {
+            switch (serviceType) {
+                case 'Online Counselling Service':
+                    return ONLINE_FEE;
+                case 'Face-to-Face Counselling Service':
+                    return F2F_FEE;
+                default:
+                    return 0;
+            }
+        }
+
+        async function fetchWithRetry(url, options, retries = 3) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    return response;
+                } catch (error) {
+                    if (i === retries - 1) throw error;
+                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+                }
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const itemTemplate = document.getElementById('itemTemplate');
+            
+            if (itemTemplate) {
+                // Ensure template is hidden and un-ID'd after cloning for initial row
+                itemTemplate.style.display = 'none'; 
+                itemTemplate.removeAttribute('id');
+            }
+
+            document.getElementById('addItemBtn').addEventListener('click', addItem);
+            
+            // Listen for input changes in sessions/fee, AND change event on the service dropdown
+            document.addEventListener('input', (e) => {
+                if (e.target.matches('.item-sessions') || e.target.matches('.item-fee')) {
+                    calculateInvoiceTotal();
+                }
+            });
+            document.addEventListener('change', (e) => {
+                if (e.target.matches('.item-description')) {
+                    updateFeeAndRecalculate(e.target.closest('tr'));
+                } else if (e.target.matches('.item-sessions') || e.target.matches('.item-fee')) {
+                    calculateInvoiceTotal();
+                }
+            });
+
+            document.getElementById('printInvoiceBtn').addEventListener('click', () => {
+                window.print();
+            });
+
+            const dateInput = document.getElementById('invoiceDate');
+            const today = new Date().toISOString().substring(0, 10);
+            if (dateInput) {
+                dateInput.value = today;
+            }
+
+            // Ensure initial row is calculated with the correct default fee (and uses the new fee value)
+            const initialRow = document.getElementById('invoiceItems').querySelector('tr:not([style*="display: none"])');
+            if (initialRow) {
+                updateFeeAndRecalculate(initialRow);
+            }
+        });
+
+        // Helper function to update fee input and total for a specific row
+        function updateFeeAndRecalculate(row) {
+            const serviceSelect = row.querySelector('.item-description');
+            const feeInput = row.querySelector('.item-fee');
+            
+            if (serviceSelect && feeInput) {
+                const serviceType = serviceSelect.value;
+                const determinedFee = getFeeForService(serviceType);
+                
+                // Update the input field with the new, correct fee
+                feeInput.value = determinedFee.toFixed(2);
+                
+                // Recalculate the invoice total
+                calculateInvoiceTotal();
+            }
+        }
+
+        function addItem() {
+            const tbody = document.getElementById('invoiceItems');
+            // Select the template row (which is now correctly hidden and un-ID'd after DOMContentLoaded runs)
+            const templateRow = tbody.querySelector('tr[style*="display: none"]'); 
+            
+            // Check if the template row exists before cloning
+            if (!templateRow) {
+                console.error("Template row not found.");
+                return;
+            }
+
+            const newRow = templateRow.cloneNode(true);
+
+            newRow.querySelectorAll('input, select').forEach(element => {
+                if (element.type === 'date') {
+                    element.value = new Date().toISOString().substring(0, 10);
+                } else if (element.type === 'number' && element.classList.contains('item-sessions')) {
+                    element.value = '1';
+                } else if (element.classList.contains('item-description')) {
+                    element.value = 'Online Counselling Service'; // Default to online
+                }
+            });
+
+            // Set the fee for the newly added item (defaults to Online Fee)
+            const feeInput = newRow.querySelector('.item-fee');
+            if(feeInput) feeInput.value = ONLINE_FEE.toFixed(2);
+            
+            newRow.querySelector('.delete-item-btn').addEventListener('click', deleteItem);
+            
+            // Make the new row visible
+            newRow.style.display = '';
+            
+            tbody.appendChild(newRow);
+            calculateInvoiceTotal();
+        }
+
+        function deleteItem(event) {
+            const row = event.target.closest('tr');
+            const tbody = document.getElementById('invoiceItems');
+            
+            // Count all visible rows (which are the actual invoice items)
+            const visibleRows = Array.from(tbody.querySelectorAll('tr')).filter(tr => tr.style.display !== 'none');
+
+            // Only allow deletion if there is more than one visible row remaining
+            if (visibleRows.length > 1) {
+                row.remove();
+                calculateInvoiceTotal();
+            } else {
+                console.error("Cannot delete the last item row.");
+            }
+        }
+
+        function calculateInvoiceTotal() {
+            let subtotal = 0;
+            // Select only visible rows to calculate total
+            const rows = Array.from(document.getElementById('invoiceItems').querySelectorAll('tr')).filter(tr => tr.style.display !== 'none');
+
+            rows.forEach(row => {
+                const sessionsInput = row.querySelector('.item-sessions');
+                const feeInput = row.querySelector('.item-fee');
+                const totalCell = row.querySelector('.item-total');
+
+                // Read the fee from the input field (which is updated by the dropdown logic)
+                const fee = parseFloat(feeInput ? feeInput.value : 0) || 0;
+                const sessions = parseFloat(sessionsInput ? sessionsInput.value : 0) || 0;
+                
+                const lineTotal = sessions * fee;
+                subtotal += lineTotal;
+
+                if (totalCell) {
+                    totalCell.textContent = '£' + lineTotal.toFixed(2);
+                }
+            });
+
+            const totalDueElement = document.getElementById('totalDue');
+            if (totalDueElement) {
+                totalDueElement.textContent = '£' + subtotal.toFixed(2);
+            }
+        }
+
+        function formatCurrency(amount) {
+            return '£' + parseFloat(amount).toFixed(2);
+        }
+    </script>
+</head>
+<body class="bg-gray-100 font-sans p-4">
+
+    <!-- Control Panel (No Print) --><div class="no-print flex justify-center space-x-4 mb-6 p-4 bg-white rounded-lg shadow-md max-w-lg mx-auto">
+        <button id="addItemBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150 shadow-md">
+            + Add Service Line
+        </button>
+        <button id="printInvoiceBtn" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 px-4 rounded-lg transition duration-150 shadow-md">
+            Print / Save as PDF
+        </button>
+    </div>
+
+    <!-- Invoice Document --><div class="invoice-page border border-gray-300 rounded-xl">
+
+        <!-- Header --><div class="flex justify-between items-start mb-10 border-b pb-4">
+            <div>
+                <h1 class="text-4xl font-extrabold text-indigo-700 invoice-title">INVOICE</h1>
+                <!-- New Invoice Number Field --><div class="flex items-center space-x-4 mt-2">
+                    <label for="invoiceNumber" class="text-sm font-semibold text-gray-700">Invoice No:</label>
+                    <input type="text" id="invoiceNumber" placeholder="INV-001" class="input-style text-lg font-medium w-32" required>
+                </div>
+                <input type="date" id="invoiceDate" class="input-style text-lg font-medium mt-2" required>
+            </div>
+            <div class="text-right header-info flex flex-col items-end">
+                <!-- Logo Updated: Changed src to an absolute URL placeholder to fix GitHub Pages path issue. -->
+                <img src="https://placehold.co/200x80/ffe4e1/808080?text=Stephanie+Anne" alt="Stephanie Anne Counselling Logo - Pink Flower" class="header-logo" onerror="this.onerror=null;this.src='https://placehold.co/200x80/ffe4e1/808080?text=Stephanie+Anne'">
+                <p class="text-gray-600">Stephanieanne@client-led.uk</p>
+                <p class="text-gray-600">Tel: 07736973185</p>
+            </div>
+        </div>
+
+        <!-- Billing To --><div class="mb-10 client-info-fields">
+            <h3 class="text-lg font-semibold text-gray-700 mb-2">BILL TO:</h3>
+            <div class="flex flex-col space-y-2">
+                <input type="text" id="clientName" placeholder="Client Name" class="input-style w-full md:w-1/2" required>
+                <input type="text" id="clientAddress1" placeholder="Address Line 1" class="input-style w-full md:w-3/4">
+                <input type="text" id="clientAddress2" placeholder="Address Line 2 (City, Postcode)" class="input-style w-full md:w-3/4">
+            </div>
+        </div>
+
+        <!-- Line Items Table --><div class="mb-10 overflow-x-auto">
+            <table class="min-w-full bg-white rounded-lg item-table">
+                <thead>
+                    <tr class="bg-indigo-100 text-indigo-800 uppercase text-sm leading-normal">
+                        <th class="py-3 px-6 text-left w-2/5">Description</th>
+                        <th class="py-3 px-6 text-center">Date</th>
+                        <th class="py-3 px-6 text-center">Sessions</th>
+                        <th class="py-3 px-6 text-center">Fee/Session</th>
+                        <th class="py-3 px-6 text-right">Total</th>
+                        <th class="py-3 px-6 text-center no-print">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="invoiceItems" class="text-gray-600 text-sm font-light">
+                    <!-- Template Row for Service Items --><tr class="border-b border-gray-200 hover:bg-gray-50" id="itemTemplate" style="display: none;">
+                        <td class="py-3 px-6 text-left whitespace-nowrap">
+                            <!-- Dropdown for Service Type -->
+                            <select class="input-style w-full item-description" required>
+                                <option value="Online Counselling Service">Online Counselling Service</option>
+                                <option value="Face-to-Face Counselling Service">Face-to-Face Counselling Service</option>
+                            </select>
+                        </td>
+                        <td class="py-3 px-6 text-center">
+                            <input type="date" class="input-style text-center w-full" required>
+                        </td>
+                        <td class="py-3 px-6 text-center">
+                            <input type="number" min="1" value="1" class="input-style text-center w-20 item-sessions" required>
+                        </td>
+                        <td class="py-3 px-6 text-center">
+                            £<input type="number" value="45.00" class="input-style text-center w-20 item-fee" step="0.01" required>
+                        </td>
+                        <td class="py-3 px-6 text-right font-semibold item-total">£45.00</td>
+                        <td class="py-3 px-6 text-center no-print">
+                            <button onclick="deleteItem(event)" class="delete-item-btn text-red-500 hover:text-red-700 font-bold">
+                                &times;
+                            </button>
+                        </td>
+                    </tr>
+                    <!-- Initial Item Row (Cloned from template in JS) --><tr class="border-b border-gray-200 hover:bg-gray-50">
+                        <td class="py-3 px-6 text-left whitespace-nowrap">
+                            <!-- Dropdown for Service Type -->
+                            <select class="input-style w-full item-description" required>
+                                <option value="Online Counselling Service">Online Counselling Service</option>
+                                <option value="Face-to-Face Counselling Service">Face-to-Face Counselling Service</option>
+                            </select>
+                        </td>
+                        <td class="py-3 px-6 text-center">
+                            <input type="date" class="input-style text-center w-full" required>
+                        </td>
+                        <td class="py-3 px-6 text-center">
+                            <input type="number" min="1" value="1" class="input-style text-center w-20 item-sessions" required>
+                        </td>
+                        <td class="py-3 px-6 text-center">
+                            £<input type="number" value="45.00" class="input-style text-center w-20 item-fee" step="0.01" required>
+                        </td>
+                        <td class="py-3 px-6 text-right font-semibold item-total">£45.00</td>
+                        <td class="py-3 px-6 text-center no-print">
+                            <button onclick="deleteItem(event)" class="delete-item-btn text-red-500 hover:text-red-700 font-bold">
+                                &times;
+                            </button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Totals & Payment --><div class="flex flex-col md:flex-row justify-between">
+            
+            <!-- Payment Instructions --><div class="w-full md:w-1/2 p-4 bg-indigo-50 rounded-lg footer-payment">
+                <h3 class="text-lg font-bold text-indigo-700 mb-2">PAYMENT METHOD</h3>
+                <p class="text-sm font-medium text-gray-700">Please make payment via Direct Bank Transfer:</p>
+                <div class="mt-2 text-sm text-gray-800">
+                    <p><strong>Sort Code:</strong> 60-83-71</p>
+                    <p><strong>Account No:</strong> 24548433</p>
+                </div>
+                <p class="mt-3 text-xs text-gray-500">
+                    *Each session is to be paid 24 hours in advance of attendance, as per the contract.
+                </p>
+            </div>
+
+            <!-- Total Due Box --><div class="w-full md:w-1/3 mt-6 md:mt-0">
+                <div class="flex justify-between items-center bg-indigo-700 text-white p-4 rounded-lg">
+                    <span class="text-xl font-bold">TOTAL DUE:</span>
+                    <span id="totalDue" class="text-2xl font-extrabold">£45.00</span>
+                </div>
+                <div class="mt-4 text-center">
+                    <p class="text-sm text-gray-600">Thank you for your timely payment.</p>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+</body>
+</html>
